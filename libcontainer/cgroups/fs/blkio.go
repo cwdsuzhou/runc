@@ -6,13 +6,17 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/opencontainers/runc/libcontainer/cgroups"
+	"github.com/opencontainers/runc/libcontainer/cgroups/fs2"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/configs"
+	"golang.org/x/sys/unix"
 )
 
 type BlkioGroup struct {
@@ -23,10 +27,19 @@ func (s *BlkioGroup) Name() string {
 }
 
 func (s *BlkioGroup) Apply(path string, d *cgroupData) error {
+	if isCgroup2IOUnifiedMode() {
+		path = convertToCgroupV2Path(path)
+	}
 	return join(path, d.pid)
 }
 
 func (s *BlkioGroup) Set(path string, cgroup *configs.Cgroup) error {
+
+	if isCgroup2IOUnifiedMode() {
+		v2Path := convertToCgroupV2Path(path)
+		return fs2.SetIo(v2Path, cgroup)
+	}
+
 	if cgroup.Resources.BlkioWeight != 0 {
 		if err := fscommon.WriteFile(path, "blkio.weight", strconv.FormatUint(uint64(cgroup.Resources.BlkioWeight), 10)); err != nil {
 			return err
@@ -158,6 +171,12 @@ func getBlkioStat(path string) ([]cgroups.BlkioStatEntry, error) {
 }
 
 func (s *BlkioGroup) GetStats(path string, stats *cgroups.Stats) error {
+
+	if isCgroup2IOUnifiedMode() {
+		v2Path := convertToCgroupV2Path(path)
+		return fs2.StatIo(v2Path, stats)
+	}
+
 	// Try to read CFQ stats available on all CFQ enabled kernels first
 	if blkioStats, err := getBlkioStat(filepath.Join(path, "blkio.io_serviced_recursive")); err == nil && blkioStats != nil {
 		return getCFQStats(path, stats)
@@ -227,4 +246,28 @@ func getStats(path string, stats *cgroups.Stats) error {
 	stats.BlkioStats.IoServicedRecursive = blkioStats
 
 	return nil
+}
+
+var (
+	isUnifiedOnce       sync.Once
+	isUnified           bool
+	unifiedIOMountpoint = "/sys/fs/cgroup/unified"
+)
+
+// isCgroup2IOUnifiedMode returns whether we are running in cgroup v2 unified mode.
+func isCgroup2IOUnifiedMode() bool {
+	isUnifiedOnce.Do(func() {
+		var st unix.Statfs_t
+		if err := unix.Statfs(unifiedIOMountpoint, &st); err != nil {
+			isUnified = false
+			return
+		}
+		isUnified = st.Type == unix.CGROUP2_SUPER_MAGIC
+	})
+	return isUnified
+}
+
+func convertToCgroupV2Path(old string) string {
+	idx := strings.LastIndex(old, "blkio")
+	return path.Join(unifiedIOMountpoint, old[idx+1:])
 }

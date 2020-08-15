@@ -22,6 +22,10 @@ func isIoSet(cgroup *configs.Cgroup) bool {
 		len(cgroup.Resources.BlkioThrottleWriteIOPSDevice) > 0
 }
 
+func SetIo(dirPath string, cgroup *configs.Cgroup) error {
+	return setIo(dirPath, cgroup)
+}
+
 func setIo(dirPath string, cgroup *configs.Cgroup) error {
 	if !isIoSet(cgroup) {
 		return nil
@@ -79,6 +83,10 @@ func readCgroup2MapFile(dirPath string, name string) (map[string][]string, error
 		return nil, err
 	}
 	return ret, nil
+}
+
+func StatIo(dirPath string, stats *cgroups.Stats) error {
+	return statIo(dirPath, stats)
 }
 
 func statIo(dirPath string, stats *cgroups.Stats) error {
